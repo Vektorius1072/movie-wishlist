@@ -1,0 +1,108 @@
+// Продакшен использует PostgreSQL (например, бесплатный Neon) — на
+// serverless-хостингах вроде Vercel файловая система не сохраняется
+// между запросами, поэтому SQLite-файл там не работает.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Пользователь. Регистрация по email + паролю с обязательным подтверждением
+// почты через одноразовую ссылку (см. модель VerificationToken).
+model User {
+  id                 String               @id @default(cuid())
+  name               String
+  email              String               @unique
+  passwordHash       String
+  emailVerifiedAt    DateTime?
+  createdAt          DateTime             @default(now())
+  memberships        GroupMember[]
+  addedItems         WishlistItem[]       @relation("AddedBy")
+  votes              Vote[]
+  verificationTokens VerificationToken[]
+}
+
+// Одноразовый токен для подтверждения почты (ссылка из письма).
+model VerificationToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Приватная группа (семья, друзья) — свой список фильмов на всех участников.
+model Group {
+  id         String         @id @default(cuid())
+  name       String
+  inviteCode String         @unique
+  createdAt  DateTime       @default(now())
+  members    GroupMember[]
+  items      WishlistItem[]
+}
+
+model GroupMember {
+  id       String   @id @default(cuid())
+  userId   String
+  groupId  String
+  role     String   @default("member")
+  joinedAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, groupId])
+}
+
+// Фильм или сериал — кешируем данные из TMDB один раз, чтобы не дёргать
+// API повторно. mediaType нужен потому, что у TMDB фильмы и сериалы —
+// разные сущности с независимой нумерацией id.
+model Movie {
+  id          String         @id @default(cuid())
+  tmdbId      Int
+  mediaType   String         @default("movie") // "movie" | "tv"
+  title       String
+  posterPath  String?
+  overview    String?
+  releaseYear Int?
+  genres      String?
+  items       WishlistItem[]
+
+  @@unique([tmdbId, mediaType])
+}
+
+// Позиция в общем списке группы: конкретный фильм, добавленный конкретным
+// участником, со статусом "хотим посмотреть" / "уже посмотрели".
+model WishlistItem {
+  id        String   @id @default(cuid())
+  groupId   String
+  movieId   String
+  addedById String
+  status    String   @default("wishlist") // "wishlist" | "watched"
+  createdAt DateTime @default(now())
+
+  group   Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  movie   Movie  @relation(fields: [movieId], references: [id], onDelete: Cascade)
+  addedBy User   @relation("AddedBy", fields: [addedById], references: [id])
+  votes   Vote[]
+
+  @@unique([groupId, movieId])
+}
+
+// Голос участника группы за фильм из списка.
+model Vote {
+  id             String @id @default(cuid())
+  wishlistItemId String
+  userId         String
+  score          Int // 1..5
+
+  wishlistItem WishlistItem @relation(fields: [wishlistItemId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([wishlistItemId, userId])
+}
